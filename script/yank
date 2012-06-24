@@ -1,0 +1,58 @@
+#!/bin/bash -e
+
+source script/_helpers.sh
+source script/_gem_info.sh
+
+# CHANGE ME
+# The String hostname of your gem server.
+GEM_SERVER="..."
+
+print_usage() {
+  cat <<EOT
+Remove a version of this gem completely.
+
+USAGE: $0 VERSION
+
+Example:
+
+# Yank version 0.3.4
+$0 0.3.4
+EOT
+}
+
+version=""
+
+parse_args() {
+  local args=()
+  while [[ ${1+defined} ]]; do
+    case "$1" in
+      -h|--help)
+        print_usage
+        exit
+        ;;
+      *)
+        args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  version="${args[0]}"
+  if [[ ! $version ]]; then
+    error "Missing version."
+    echo
+    print_usage
+    exit 1
+  fi
+
+  gem_id="${GEM_NAME}-${version}"
+}
+
+parse_args "$@"
+
+set +e
+
+git tag -d $gem_id
+git branch -D $gem_id
+git push origin :refs/tags/$gem_id :refs/heads/$gem_id
+ssh root@$GEM_SERVER "rm -vf /var/www/gemserver/gems/$gem_id.gem"

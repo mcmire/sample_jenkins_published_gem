@@ -1,0 +1,37 @@
+#!/bin/bash -l
+
+# This file is used by the CI server to run tests for the project.
+# You should not use it directly.
+
+set -ex
+
+source script/_helpers.sh
+
+git_branch="$1"
+
+die_if_missing_git_branch() {
+  if [[ ! $git_branch ]]; then
+    error "Missing git branch."
+    echo "USAGE: $0 GIT_BRANCH"
+    exit 1
+  fi
+}
+
+verify_release() {
+  set +ex
+  # CHANGE ME (if you want)
+  # We assume that all you need to run your tests is `rake spec`. If it's
+  # actually more like `rake spec:all` or `rake ci`, then change that here.
+  if ! run_in_rubies "${SUPPORTED_RUBY_VERSIONS[*]}" '\
+    bundle install && \
+    env RAILS_ENV=test CI_IS_RUNNING=1 bundle exec rake spec --trace \
+  '; then
+    error "verify_release failed, aborting."
+    exit 3
+  fi
+  set -ex
+}
+
+die_if_missing_git_branch
+verify_release
+

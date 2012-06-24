@@ -1,0 +1,64 @@
+#!/usr/bin/env ruby
+
+require 'pp'
+
+require 'rubygems'
+require 'patron'
+
+# The String URL prefix to a repository in your git repo.
+# If CI is running on the same box as git, you can use a file:/// URL.
+GIT_ROOT_URL = "ssh://git@git.yourcompany.com"
+
+# The String public URL to your Jenkins box.
+JENKINS_ROOT_URL = "http://ci.yourcompany.com"
+
+def read_args
+  $stdin.gets.split(" ")
+end
+
+def setup
+  git_dir = `git rev-parse --git-dir 2>/dev/null`.strip
+  if git_dir.empty?
+    $stdout.puts 'FATAL: post-receive: GIT_DIR not set'
+    exit 1
+  end
+
+  git_dir = File.expand_path(git_dir)
+  repo_name = File.basename(git_dir, '.git')
+  repo_url = "#{GIT_ROOT_URL}/#{repo_name}.git"
+
+  return {
+    :git_dir => git_dir,
+    :repo_name => repo_name,
+    :repo_url => repo_url
+  }
+end
+
+# Just ping Jenkins - let it figure out if it actually needs to create a new
+# build or not based on what is configured for this project
+def ping_jenkins(repo_config, http)
+  puts "Notifying Jenkins of relevant changes to this repo..."
+  params = { :url => repo_config[:repo_url] }
+  qs = Patron::Util.build_query_string_from_hash(params, true)
+  http.get("/git/notifyCommit?#{qs}")
+end
+
+def notify_jenkins(args, repo_config)
+  oldrev, newrev, ref = args
+
+  # Don't do anything if a branch or tag is being deleted
+  return if newrev == "0000000000000000000000000000000000000000"
+
+  http = Patron::Session.new
+  http.base_url = JENKINS_ROOT_URL
+  ping_jenkins(repo_config, http)
+end
+
+
+# ---- MAIN ------------------------------------------------------------------
+if __FILE__ == $0
+  args = read_args()
+  repo_config = setup()
+  notify_jenkins(args, repo_config)
+end
+

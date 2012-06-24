@@ -1,0 +1,136 @@
+#!/bin/bash -l
+
+# This file is used by the CI server to release a new version of the gem.
+# You should not use it directly.
+
+source script/_helpers.sh
+switch_to_ruby "${SUPPORTED_RUBY_VERSIONS[0]}"
+source script/_gem_info.sh
+
+set -ex
+
+GEMS_DIR=/var/www/gemserver
+
+print_usage() {
+  cat <<EOT
+USAGE: $0 COMMIT_ID VERSION
+EOT
+}
+
+commit_id="$1"
+if [[ ! $commit_id ]]; then
+  error "Missing commit id."
+  print_usage
+  exit 1
+fi
+
+new_version="$2"
+if [[ ! $new_version ]]; then
+  error "Missing version."
+  print_usage
+  exit 1
+fi
+
+old_gem_id="${GEM_NAME}-${GEM_VERSION}"  # as of master
+new_gem_id="${GEM_NAME}-${new_version}"
+
+gem_published=""
+
+subject_of() {
+  git log --pretty='format:%s' $1 | head -n 1
+}
+
+create_release_commit() {
+  echo "Creating a release commit for version $new_version..."
+  # assume we are already on master
+  echo $new_version > $GEM_VERSION_FILENAME
+  git commit $GEM_VERSION_FILENAME -m "Release $new_version"
+  git push origin master
+}
+
+publish_gem() {
+  local current_version="$(bundle exec rake about:version)"
+  if [[ $current_version != $new_version ]]; then
+    error "The version you are trying to release doesn't match the version of the gem that would be created."
+    exit 2
+  fi
+
+  echo "Publishing $new_gem_id..."
+
+  # assume we are already on master
+  rm -rf pkg
+  rake gem:build
+  mv pkg/$new_gem_id.gem $GEMS_DIR/gems
+  gem-install-once builder  # needed to generate index
+  gem generate_index --directory $GEMS_DIR
+}
+
+push_tag() {
+  echo "Tagging $new_gem_id..."
+  # Create a tag remotely without creating it locally
+  git push origin $1:refs/tags/$new_gem_id
+}
+
+publish_and_tag() {
+  # The logic here is a bit complicated but it goes like this:
+  #
+  # * If $commit_id refers to the latest commit on master, the version we are
+  #   releasing is different from the current version, and the version has
+  #   not been released yet, then publish a commit on master that sets the
+  #   version to the specified version, release the version itself, then
+  #   publish a tag that points to this new commit.
+  #
+  # * If $commit_id refers to a release commit that has not been tagged yet,
+  #   then re-create the tag. (This is really only for re-running bad builds in
+  #   Jenkins.)
+  #
+  # * Similarly, if $commit_id refers to a commit that is prior to a release
+  #   commit, and the release commit has not been tagged, then re-create the
+  #   tag there. (Also for re-running bad builds.)
+  #
+  # * We never re-release a gem if it has already been released.
+  #
+  # * We never replace a release tag.
+
+  # TODO: What if the version has been released but no tag exists, or the tag
+  # exists but the version hasn't been released?
+
+  # Source: http://stackoverflow.com/questions/2263674/how-do-i-find-the-next-commit-in-git
+  local next_commit_id=$(
+    git log --no-color --pretty=oneline --reverse $commit_id..master |
+    head -n 1 |
+    cut -d " " -f 1
+  )
+  local current_master=$(git rev-parse master)
+
+  local release_tag=""
+  [[ -f ".git/refs/tags/$new_gem_id" ]] && release_tag=$(git rev-parse refs/tags/$new_gem_id)
+
+  # The version check here is not bulletproof -- a better way would be to check
+  # if $new_version > $GEM_VERSION -- but that would take a little more work, so
+  # this is okay for now.
+  if [[ $current_master == $commit_id && $GEM_VERSION != $new_version && ! -f $GEMS_DIR/gems/$new_gem_id.gem ]]; then
+    git checkout master
+    create_release_commit
+    publish_gem
+    push_tag HEAD
+  elif [[ ! $release_tag && $(subject_of $commit_id) == "Release $new_version" ]]; then
+    push_tag $commit_id
+    # re-publish gem?
+  elif [[ ! $release_tag && $next_commit_id && $(subject_of $next_commit_id) == "Release $new_version" ]]; then
+    push_tag $next_commit_id
+    # re-publish gem?
+  else
+    echo "Not tagging release since commit id is ineligible for being tagged, or gem already exists."
+  fi
+}
+
+remove_release_branch() {
+  # Remove the branch that was pushed in order to create this release
+  echo "Removing release branch..."
+  git push origin :refs/heads/$new_gem_id --force
+}
+
+publish_and_tag
+remove_release_branch
+

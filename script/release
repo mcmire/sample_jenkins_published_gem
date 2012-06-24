@@ -1,0 +1,65 @@
+#!/bin/bash -e
+
+source script/_helpers.sh
+source script/_gem_info.sh
+
+print_usage() {
+  cat <<EOT
+USAGE: $0 VERSION
+
+Example:
+
+# Release version 0.3.4
+$0 0.3.4
+EOT
+}
+
+version=""
+gem_id=""
+
+parse_args() {
+  local args=()
+  while [[ ${1+defined} ]]; do
+    case "$1" in
+      -h|--help)
+        print_usage
+        exit
+        ;;
+      *)
+        args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  version="${args[0]}"
+  if [[ ! $version ]]; then
+    error "Missing version."
+    echo
+    print_usage
+    exit 1
+  fi
+  # TODO: Die if version is <= current version
+
+  gem_id="${GEM_NAME}-${version}"
+}
+
+die_if_version_already_exists() {
+  git fetch --all
+  if [[ -f .git/refs/tags/$gem_id ]]; then
+    error "Version $version already exists."
+    exit 2
+  fi
+}
+
+push_version_branch() {
+  # create a branch remotely w/o creating it locally
+  git push origin master:refs/heads/$gem_id --force
+}
+
+parse_args "$@"
+die_if_not_on_master
+die_if_master_unpushed
+die_if_version_already_exists
+push_version_branch
+
